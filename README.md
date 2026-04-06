@@ -6,6 +6,8 @@ This folder holds manifests and Helm values used while following:
 
 You can use the networking and EKS related values I used as reference when following the AWS guide.
 
+Note: the examples don't include the monitoring implementation (Prometheus and Grafana)
+
 ---
 
 ## Prerequisites (from the post)
