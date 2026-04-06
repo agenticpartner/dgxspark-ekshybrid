@@ -10,6 +10,9 @@ Note: the examples don't include the monitoring implementation (Prometheus and G
 
 ---
 
+![Alt Text](./dgxspark-eks.png)
+
+
 ## Prerequisites (from the post)
 
 - VPC layout, EKS cluster **with hybrid nodes enabled**, and **private connectivity** (VPN or Direct Connect) between on‑prem and the cluster VPC.
