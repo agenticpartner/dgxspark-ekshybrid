@@ -1,0 +1,73 @@
+# EKS API (hostname only) — pods cannot reach in-cluster Service IP (e.g. 172.17.0.1) until CNI works
+k8sServiceHost: 2706FDCA0E3C9A87BD06E78572B22168.gr7.us-east-1.eks.amazonaws.com
+k8sServicePort: "443"
+
+enableIPv4Masquerade: true
+externalWorkloads:
+  enabled: false
+highScaleIPcache:
+  enabled: false
+
+# BGP Control Plane for LoadBalancer services
+bgpControlPlane:
+  enabled: true
+
+# NodePort services
+nodePort:
+  enabled: true
+  
+# Node affinity - Run Cilium only on hybrid nodes
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: eks.amazonaws.com/compute-type
+          operator: In
+          values:
+          - hybrid  
+  
+# IPAM configuration for pod networking
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4PodCIDRList:
+    - 172.16.0.0/16   # RemotePodNetwork CIDR
+    clusterPoolIPv4MaskSize: 25
+
+# Cilium Operator configuration (replicas: 1 required when one node: hostPort 9963)
+operator:
+  replicas: 1
+  rollOutPods: true
+  unmanagedPodWatcher:
+    restart: false
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: eks.amazonaws.com/compute-type
+            operator: In
+            values:
+            - hybrid
+
+# Envoy must run on the same nodes as cilium-agent (podAffinity). Without this, a
+# DaemonSet pod is created on every node; EC2 nodes have no cilium → Pending forever.
+envoy:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: eks.amazonaws.com/compute-type
+            operator: In
+            values:
+            - hybrid
+          - key: cilium.io/no-schedule
+            operator: NotIn
+            values:
+            - "true"

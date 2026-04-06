@@ -1,0 +1,159 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Creates EKS cluster with hybrid nodes support. Requires existing VPC, subnets, and IAM role. Optional EC2 managed nodes: deploy hybrid-eks-nodes.yaml after this stack completes.'
+
+Metadata:
+  Version:
+    Number: "v0.1.0"
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Name for the EKS cluster
+  ClusterRoleArn:
+    Type: String
+    Description: ARN of an existing IAM role for the EKS cluster
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID of the VPC where the cluster will be created
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the first private subnet for EKS control plane ENIs
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID of the second private subnet for EKS control plane ENIs
+  SecurityGroupId:
+    Type: String
+    Description: >
+      Optional cluster security group ID. If set, you must allow TCP 443 from VpcCidrForKubernetesApi
+      (and from RemoteNodeCIDR / RemotePodCIDR for hybrid) on this group yourself; this template only
+      adds VPC ingress when it creates EKSClusterSG (empty SecurityGroupId).
+    Default: ''
+  VpcCidrForKubernetesApi:
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\/([0-9]|[1-2][0-9]|3[0-2])$'
+    Description: >
+      VPC IPv4 CIDR allowed to reach the cluster API on 443 (e.g. 10.0.0.0/16).
+      Required so EC2 nodes in private subnets can use the private EKS endpoint.
+      Must match your VPC CIDR (or a supernet that covers the node subnets).
+  RemoteNodeCIDR:
+    Type: String
+    Description: The CIDR block for hybrid nodes on-premises
+  RemotePodCIDR:
+    Type: String
+    Description: The CIDR block for pods running on hybrid nodes
+    Default: ''
+  ClusterAuthMode:
+    Type: String
+    Default: 'API_AND_CONFIG_MAP'
+    AllowedValues:
+      - 'API_AND_CONFIG_MAP'
+      - 'API'
+  ClusterEndpointConnectivity:
+    Type: String
+    Default: 'Private'
+    AllowedValues:
+      - 'Private'
+      - 'Public'
+  K8sVersion:
+    Type: String
+    Default: '1.32'
+
+Conditions:
+  HasRemotePodCIDR: !Not [!Equals [!Ref RemotePodCIDR, '']]
+  HasPublicAccess: !Equals [!Ref ClusterEndpointConnectivity, 'Public']
+  HasPrivateAccess: !Equals [!Ref ClusterEndpointConnectivity, 'Private']
+  NoSecurityGroupId: !Equals [!Ref SecurityGroupId, '']
+
+Resources:
+
+  # ── Security Group ────────────────────────────────────────────────────────────
+  EKSClusterSG:
+    Condition: NoSecurityGroupId
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EKS control plane ENIs; HTTPS from hybrid networks and VPC private subnet nodes
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # Managed EC2 / private-subnet workloads to private EKS API endpoint
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidrForKubernetesApi
+          Description: VPC to EKS API (managed nodes in private subnets)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref RemoteNodeCIDR
+          Description: Hybrid on-prem nodes to EKS API
+        - !If
+          - HasRemotePodCIDR
+          - IpProtocol: tcp
+            FromPort: 443
+            ToPort: 443
+            CidrIp: !Ref RemotePodCIDR
+            Description: Hybrid pod network to EKS API
+          - !Ref "AWS::NoValue"
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-sg'
+
+  # ── EKS Cluster ───────────────────────────────────────────────────────────────
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref K8sVersion
+      RoleArn: !Ref ClusterRoleArn
+      AccessConfig:
+        AuthenticationMode: !Ref ClusterAuthMode
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !If [NoSecurityGroupId, !Ref EKSClusterSG, !Ref SecurityGroupId]
+        SubnetIds:
+          - !Ref PrivateSubnet1Id
+          - !Ref PrivateSubnet2Id
+        EndpointPublicAccess: !If [HasPublicAccess, true, false]
+        EndpointPrivateAccess: !If [HasPrivateAccess, true, false]
+      RemoteNetworkConfig:
+        RemoteNodeNetworks:
+          - Cidrs: [!Ref RemoteNodeCIDR]
+        RemotePodNetworks: !If
+          - HasRemotePodCIDR
+          - [Cidrs: [!Ref RemotePodCIDR]]
+          - !Ref 'AWS::NoValue'
+
+  # Managed nodes use the EKS cluster security group on their ENIs. Allow that SG
+  # as a source to the API ENI security group (covers secondary VPC CIDRs and SG-based eval).
+  ControlPlaneIngressFromClusterSg:
+    Type: AWS::EC2::SecurityGroupIngress
+    DependsOn: EKSCluster
+    Properties:
+      GroupId: !If [NoSecurityGroupId, !Ref EKSClusterSG, !Ref SecurityGroupId]
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      SourceSecurityGroupId: !GetAtt EKSCluster.ClusterSecurityGroupId
+      Description: EKS cluster security group nodes to Kubernetes API on control plane ENIs
+
+Outputs:
+  EKSClusterName:
+    Description: Name of the EKS Cluster
+    Value: !Ref EKSCluster
+    Export:
+      Name: EKSCluster
+
+  EKSClusterARN:
+    Description: ARN of the EKS Cluster
+    Value: !GetAtt EKSCluster.Arn
+    Export:
+      Name: EKSClusterARN
+
+  EKSClusterRoleARN:
+    Description: ARN of the IAM role used by the EKS Cluster
+    Value: !Ref ClusterRoleArn
+    Export:
+      Name: EKSClusterRoleARN
+
+  ClusterSecurityGroupId:
+    Description: EKS-created cluster security group (attached to managed nodes; use for SG-based API rules)
+    Value: !GetAtt EKSCluster.ClusterSecurityGroupId

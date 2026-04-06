@@ -1,0 +1,44 @@
+image:
+    repository: "nvcr.io/nim/qwen/qwen3-32b-dgx-spark"
+    tag: 1.0.0-variant
+model:
+  ngcAPISecret: ngc-api
+nodeSelector:
+  eks.amazonaws.com/compute-type: hybrid
+resources:
+  limits:
+    nvidia.com/gpu: 1
+persistence:
+  enabled: false
+imagePullSecrets:
+  - name: ngc-secret
+tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+
+# Startup: use /live (HTTP server up) not /ready (model loaded). /ready before the
+# server binds causes "connection refused"; /ready during load returns 503 and stalls startup.
+# Readiness still uses /ready so Service traffic waits until the model can serve.
+startupProbe:
+  enabled: true
+  path: /v1/health/live
+  initialDelaySeconds: 120
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 120
+readinessProbe:
+  enabled: true
+  path: /v1/health/ready
+  initialDelaySeconds: 30
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 60
+livenessProbe:
+  enabled: true
+  method: http
+  path: /v1/health/live
+  initialDelaySeconds: 600
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3

@@ -1,0 +1,51 @@
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPClusterConfig
+metadata:
+  name: cilium-bgp
+spec:
+  nodeSelector:
+    matchExpressions:
+    - key: eks.amazonaws.com/compute-type
+      operator: In
+      values:
+      - hybrid
+  bgpInstances:
+  - name: "cilium-bgp"
+    localASN: 64512
+    peers:
+    - name: "onprem-router"
+      peerASN: 65000
+      peerAddress: 192.168.18.1
+      peerConfigRef:
+        name: "cilium-peer"
+        
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPPeerConfig
+metadata:
+  name: cilium-peer
+spec:
+  timers:
+    holdTimeSeconds: 30
+    keepAliveTimeSeconds: 10
+  gracefulRestart:
+    enabled: true
+    restartTimeSeconds: 120
+  families:
+    - afi: ipv4
+      safi: unicast
+      advertisements:
+        matchLabels:
+          advertise: "bgp"
+
+---
+apiVersion: cilium.io/v2
+kind: CiliumBGPAdvertisement
+metadata:
+  name: bgp-adv-pod
+  labels:
+    advertise: bgp
+spec:
+  advertisements:
+    - advertisementType: "PodCIDR"

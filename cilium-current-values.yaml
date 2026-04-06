@@ -1,0 +1,32 @@
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: eks.amazonaws.com/compute-type
+          operator: In
+          values:
+          - hybrid
+bgpControlPlane:
+  enabled: true
+ipam:
+  mode: cluster-pool
+  operator:
+    clusterPoolIPv4MaskSize: 25
+    clusterPoolIPv4PodCIDRList:
+    - 172.16.0.0/16 # RemotePodNetwork CIDR
+nodePort:
+  enabled: true
+operator:
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: eks.amazonaws.com/compute-type
+            operator: In
+            values:
+            - hybrid
+  rollOutPods: true
+  unmanagedPodWatcher:
+    restart: false

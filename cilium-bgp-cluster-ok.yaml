@@ -1,0 +1,20 @@
+apiVersion: cilium.io/v2alpha1
+kind: CiliumBGPClusterConfig
+metadata:
+  name: cilium-bgp
+spec:
+  nodeSelector:
+    matchExpressions:
+    - key: eks.amazonaws.com/compute-type
+      operator: In
+      values:
+      - hybrid
+  bgpInstances:
+  - name: "rack0"
+    localASN: 64512
+    peers:
+    - name: "onprem-router"
+      peerASN: 65000
+      peerAddress: 192.168.18.1
+      peerConfigRef:
+        name: "cilium-peer"

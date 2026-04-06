@@ -1,0 +1,224 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  VPC endpoints for EKS nodes in private subnets without NAT: S3 gateway (ECR image layers) plus interface
+  endpoints (STS, ECR API, ECR DKR, EKS API; optional Logs). S3 uses RouteTableIds; interface endpoints use SubnetIds.
+  If both subnets share one route table, pass the same ID for PrivateRouteTable1Id and PrivateRouteTable2Id.
+  Use the same ClusterName as your EKS cluster for tags. VPC DNS hostnames and DNS support must be enabled.
+
+Metadata:
+  Version:
+    Number: "v0.1.0"
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Network
+        Parameters:
+          - VpcId
+          - VpcCidrForEndpointAccess
+          - PrivateSubnet1Id
+          - PrivateSubnet2Id
+          - PrivateRouteTable1Id
+          - PrivateRouteTable2Id
+      - Label:
+          default: Cluster (required for naming)
+        Parameters:
+          - ClusterName
+      - Label:
+          default: Optional
+        Parameters:
+          - EnableCloudWatchLogsEndpoint
+
+Parameters:
+  VpcId:
+    Type: String
+    Description: VPC ID that contains the EKS cluster and private subnets (e.g. vpc-0abc123)
+  VpcCidrForEndpointAccess:
+    Type: String
+    AllowedPattern: '^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\/([0-9]|[1-2][0-9]|3[0-2])$'
+    Description: >
+      IPv4 CIDR allowed to reach interface endpoints on 443 (usually the VPC IPv4 CIDR).
+      Must cover the private IPs of EKS nodes and any CIDR that needs to use these endpoints.
+  PrivateSubnet1Id:
+    Type: String
+    Description: Private subnet ID in AZ 1 for interface endpoints (e.g. subnet-0abc123). Same subnets as EKS nodes is typical.
+  PrivateSubnet2Id:
+    Type: String
+    Description: Private subnet ID in AZ 2 (e.g. subnet-0def456). Must be a different AZ than subnet 1.
+  PrivateRouteTable1Id:
+    Type: String
+    Description: Route table ID for private subnet 1 (S3 gateway). If one RT serves both subnets, use the same value for PrivateRouteTable2Id (template dedupes RouteTableIds).
+  PrivateRouteTable2Id:
+    Type: String
+    Description: Route table ID for private subnet 2, or same as route table 1 if shared.
+  ClusterName:
+    Type: String
+    MinLength: 1
+    Description: >
+      EKS cluster name this VPC endpoint stack is paired with (same value as hybrid-eks-cluster / kubectl).
+      Required: AWS does not link VPC endpoints to a cluster; this ties tags and your deployment to that cluster
+      for operations. Endpoints still apply to the whole VPC.
+  EnableCloudWatchLogsEndpoint:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Description: Create com.amazonaws.region.logs interface endpoint (for CloudWatch Logs from nodes/agents)
+
+Conditions:
+  CreateLogsEndpoint: !Equals [!Ref EnableCloudWatchLogsEndpoint, 'true']
+  PrivateRouteTablesDistinct: !Not [!Equals [!Ref PrivateRouteTable1Id, !Ref PrivateRouteTable2Id]]
+
+Resources:
+  InterfaceEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTPS from VPC CIDR to interface VPC endpoints for EKS private networking
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidrForEndpointAccess
+          Description: HTTPS from VPC for AWS API via PrivateLink
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-eks-vpce-sg'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcEndpointType: Gateway
+      RouteTableIds: !If
+        - PrivateRouteTablesDistinct
+        - - !Ref PrivateRouteTable1Id
+          - !Ref PrivateRouteTable2Id
+        - - !Ref PrivateRouteTable1Id
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-s3-gateway'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  StsInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.sts'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref InterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-sts'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  EcrApiInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.api'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref InterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-ecr-api'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  EcrDkrInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.ecr.dkr'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref InterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-ecr-dkr'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  EksInterfaceEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.eks'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref InterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-eks'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+  LogsInterfaceEndpoint:
+    Condition: CreateLogsEndpoint
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VpcId
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.logs'
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      SecurityGroupIds:
+        - !Ref InterfaceEndpointSecurityGroup
+      PrivateDnsEnabled: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ClusterName}-vpce-logs'
+        - Key: eks:cluster-name
+          Value: !Ref ClusterName
+
+Outputs:
+  InterfaceEndpointSecurityGroupId:
+    Description: Security group used by the interface VPC endpoints
+    Value: !Ref InterfaceEndpointSecurityGroup
+
+  S3GatewayEndpointId:
+    Description: S3 gateway VPC endpoint ID (ECR layer traffic)
+    Value: !Ref S3GatewayEndpoint
+
+  StsInterfaceEndpointId:
+    Description: STS interface VPC endpoint ID
+    Value: !Ref StsInterfaceEndpoint
+
+  EcrApiInterfaceEndpointId:
+    Description: ECR API interface VPC endpoint ID
+    Value: !Ref EcrApiInterfaceEndpoint
+
+  EcrDkrInterfaceEndpointId:
+    Description: ECR DKR interface VPC endpoint ID
+    Value: !Ref EcrDkrInterfaceEndpoint
+
+  EksInterfaceEndpointId:
+    Description: EKS API interface VPC endpoint ID
+    Value: !Ref EksInterfaceEndpoint

@@ -1,0 +1,7 @@
+{
+    "Parameters": {
+      "RoleName": "AmazonEKSHybridNodesRole",
+      "SSMDeregisterConditionTagKey": "EKSClusterARN",
+      "SSMDeregisterConditionTagValue": "arn:aws:eks:us-east-1:783764571332:cluster/nvidiagpu"
+    }
+}

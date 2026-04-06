@@ -1,0 +1,20 @@
+{
+    "Version":"2012-10-17",		 	 	 
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": "ssm:DescribeInstanceInformation",
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": "ssm:DeregisterManagedInstance",
+            "Resource": "arn:aws:ssm:us-east-1:783764571332:managed-instance/*",
+            "Condition": {
+                "StringEquals": {
+                    "ssm:resourceTag/EKSClusterARN": "arn:aws:eks:us-east-1:783764571332:cluster/nvidiagpu"
+                }
+            }
+        }
+    ]
+}

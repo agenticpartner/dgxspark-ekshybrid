@@ -1,0 +1,13 @@
+apiVersion: node.eks.aws/v1alpha1
+kind: NodeConfig
+spec:
+  cluster:
+    name: nvidiagpu
+    region: us-east-1
+  kubelet:
+    flags:
+      - --register-with-taints=nvidia.com/gpu=true:NoSchedule    
+  hybrid:
+    ssm:
+      activationCode: RTBFjd6/KJEgJRgVw/Ad
+      activationId: 00617752-b818-4bc7-b3b8-b43bacb1cd6f
